@@ -53,6 +53,7 @@ git clone https://github.com/inclusionAI/dFactory.git --recursive
 cd dFactory/VeOmni
 
 # Install dependencies
+uv vene --python 3.11
 uv sync --extra gpu
 
 # Activate environment
@@ -78,6 +79,7 @@ Our training scripts require model weights in a "merged-expert" format for optim
 
 ```bash
 # Choose a destination for the original model files
+# export HF_ENDPOINT=https://hf-mirror.com
 python ./scripts/download_hf_model.py \
   --repo_id inclusionAI/LLaDA2.0-mini-preview \
   --local_dir /path/to/separate_expert_model

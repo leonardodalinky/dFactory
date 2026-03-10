@@ -241,3 +241,6 @@ lmms-eval
 
 # temp files
 tmp_*
+
+# outputs
+llada2_mini_bd_sft_outputs/

@@ -1,12 +1,15 @@
 model:
   config_path: ./configs/model_configs/llada2_mini
-  model_path: ./LLaDA2.0-mini-preview-moe-merge
-  tokenizer_path: ./LLaDA2.0-mini-preview-moe-merge
+  # model_path: ./LLaDA2.0-mini-preview-moe-merge
+  model_path: ../merged_model/LLaDA2.1-mini
+  # tokenizer_path: ./LLaDA2.0-mini-preview-moe-merge
+  tokenizer_path: ../merged_model/LLaDA2.1-mini
   attn_implementation: sdpa
   moe_implementation: fused
 
 data:
-  train_path: ./gsm8k_datasets/gsm8k_train.jsonl
+  # train_path: ./gsm8k_datasets/gsm8k_train.jsonl
+  train_path: ../icoder_dataset_lite/ling_coder_sft_interleaved/train_00000_of_00026.jsonl
   data_type: conversation
   datasets_type: mapping
   dataloader_type: native

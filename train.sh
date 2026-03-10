@@ -6,12 +6,17 @@ export TOKENIZERS_PARALLELISM=false
 export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 
 NNODES=${NNODES:=1}
+# TODO: set to restrict the number of gpus to avoid oversubscription
+# CUDA_VISIBLE_DEVICES does not affect with `nvidia-smi --list-gpus`
+# CUDA_VISIBLE_DEVICES=0,1,2,3
+# NPROC_PER_NODE=${NPROC_PER_NODE:=4}
 NPROC_PER_NODE=${NPROC_PER_NODE:=$(nvidia-smi --list-gpus | wc -l)}
+
 NODE_RANK=${NODE_RANK:=0}
 MASTER_ADDR=${MASTER_ADDR:=0.0.0.0}
 MASTER_PORT=${MASTER_PORT:=12345}
 
-if [[ "$NNODES" == "1" ]]; then
+if [ "$NNODES" == "1" ]; then
   additional_args="$additional_args --standalone"
 else
   additional_args="--rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT}"
