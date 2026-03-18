@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 from dataclasses import asdict, dataclass, field
 from functools import partial
@@ -122,6 +123,18 @@ class LLaDA2TrainingArguments(TrainingArguments):
     same_token_labels: bool = field(
         default=False,
         metadata={"help": "If use same token location labels. True: no shift, False: use next-token prediction shift."}
+    )
+    data_monitor_steps: int = field(
+        default=0,
+        metadata={"help": "Log one decoded training sample to wandb every N global steps. 0 disables this monitor."},
+    )
+    data_monitor_max_tokens: int = field(
+        default=512,
+        metadata={"help": "Maximum number of tokens to decode when logging monitored training samples."},
+    )
+    data_monitor_random_sample: bool = field(
+        default=True,
+        metadata={"help": "Whether to randomly pick micro-batch/sample for monitored data logging."},
     )
 
 
@@ -348,6 +361,21 @@ def main():
         )
         profiler.start()
 
+    def _decode_for_monitor(token_ids: "torch.Tensor", max_tokens: int, skip_special_tokens: bool = False) -> str:
+        token_ids = token_ids.detach().cpu().view(-1)
+        if max_tokens > 0:
+            token_ids = token_ids[:max_tokens]
+        return tokenizer.decode(token_ids.tolist(), skip_special_tokens=skip_special_tokens)
+
+    def _decode_labels_for_monitor(labels: "torch.Tensor", max_tokens: int, skip_special_tokens: bool = False) -> str:
+        labels = labels.detach().cpu().view(-1)
+        valid = labels[labels != -100]
+        if max_tokens > 0:
+            valid = valid[:max_tokens]
+        if valid.numel() == 0:
+            return ""
+        return tokenizer.decode(valid.tolist(), skip_special_tokens=skip_special_tokens)
+
     start_epoch, start_step, global_step = 0, 0, 0
     save_checkpoint_path = None
     environ_meter = helper.EnvironMeter(
@@ -427,6 +455,81 @@ def main():
 
             if global_step == 1:
                 helper.print_example(example=micro_batches[0], rank=args.train.local_rank)
+
+            should_log_data_sample = (
+                args.train.global_rank == 0
+                and args.train.use_wandb
+                and args.train.data_monitor_steps > 0
+                and global_step % args.train.data_monitor_steps == 0
+                and len(micro_batches) > 0
+            )
+
+            if should_log_data_sample:
+                monitor_micro_idx = 0
+                if args.train.data_monitor_random_sample:
+                    monitor_micro_idx = random.randrange(len(micro_batches))
+
+                monitor_micro_batch = micro_batches[monitor_micro_idx]
+                input_ids = monitor_micro_batch.get("input_ids", None)
+                noisy_input_ids = monitor_micro_batch.get("noisy_input_ids", None)
+                labels = monitor_micro_batch.get("labels", None)
+
+                if input_ids is not None and input_ids.ndim >= 2:
+                    monitor_sample_idx = 0
+                    if args.train.data_monitor_random_sample:
+                        monitor_sample_idx = random.randrange(input_ids.shape[0])
+
+                    input_ids_sample = input_ids[monitor_sample_idx]
+                    noisy_input_ids_sample = (
+                        noisy_input_ids[monitor_sample_idx] if noisy_input_ids is not None else input_ids_sample
+                    )
+                    labels_sample = labels[monitor_sample_idx] if labels is not None else torch.empty(0, dtype=torch.long)
+
+                    prompt_length = int((labels_sample == -100).sum().item()) if labels is not None else -1
+                    monitored_label_tokens = int((labels_sample != -100).sum().item()) if labels is not None else -1
+                    masked_noisy_tokens = int((noisy_input_ids_sample == 156895).sum().item()) if noisy_input_ids is not None else -1
+
+                    monitor_row = [
+                        global_step,
+                        epoch,
+                        monitor_micro_idx,
+                        monitor_sample_idx,
+                        prompt_length,
+                        monitored_label_tokens,
+                        masked_noisy_tokens,
+                        _decode_for_monitor(
+                            input_ids_sample,
+                            max_tokens=args.train.data_monitor_max_tokens,
+                            skip_special_tokens=False,
+                        ),
+                        _decode_for_monitor(
+                            noisy_input_ids_sample,
+                            max_tokens=args.train.data_monitor_max_tokens,
+                            skip_special_tokens=False,
+                        ),
+                        _decode_labels_for_monitor(
+                            labels_sample,
+                            max_tokens=args.train.data_monitor_max_tokens,
+                            skip_special_tokens=False,
+                        ) if labels is not None else "",
+                    ]
+
+                    monitor_table = wandb.Table(
+                        columns=[
+                            "global_step",
+                            "epoch",
+                            "micro_batch_idx",
+                            "sample_idx",
+                            "prompt_length",
+                            "label_token_count",
+                            "noisy_mask_token_count",
+                            "input_text",
+                            "noisy_input_text",
+                            "label_text",
+                        ],
+                        data=[monitor_row],
+                    )
+                    wandb.log({"debug/data_sample": monitor_table}, step=global_step)
 
             total_loss = 0
             synchronize()

@@ -3,13 +3,13 @@ model:
   # model_path: ./LLaDA2.0-mini-preview-moe-merge
   model_path: ../merged_model/LLaDA2.1-mini
   # tokenizer_path: ./LLaDA2.0-mini-preview-moe-merge
-  tokenizer_path: ../merged_model/LLaDA2.1-mini
+  tokenizer_path: ./tokenizers/icoder
   attn_implementation: sdpa
   moe_implementation: fused
 
 data:
   # train_path: ./gsm8k_datasets/gsm8k_train.jsonl
-  train_path: ../icoder_dataset_lite/ling_coder_sft_interleaved/train_00000_of_00026.jsonl
+  train_path: ./icoder_dataset_lite/ling_coder_sft_interleaved/train_00000_of_00026.jsonl
   data_type: conversation
   datasets_type: mapping
   dataloader_type: native
@@ -58,5 +58,11 @@ train:
   block_diffusion_mode: true
   block_size: 32
   same_token_labels: true
-  use_wandb: false  # or you can set `wandb_project` and `wandb_name` to trace your training
+  use_wandb: true  # or you can set `wandb_project` and `wandb_name` to trace your training
+  wandb_project: iCoder-LLaDA
+  wandb_name: icoder-dev
+  data_monitor_steps: 1        # set >0 to log one decoded training sample to wandb every N steps
+  data_monitor_max_tokens: 512 # max decoded tokens for input/noisy/label text in monitor table
+  data_monitor_random_sample: true
   log_steps: 1
+  max_steps: 10 # for debug
