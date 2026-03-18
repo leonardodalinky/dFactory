@@ -241,6 +241,7 @@ lmms-eval
 
 # temp files
 tmp_*
+rsync_tmp_*
 
 # outputs
 llada2_mini_bd_sft_outputs/

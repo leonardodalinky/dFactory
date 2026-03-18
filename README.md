@@ -53,7 +53,7 @@ git clone https://github.com/inclusionAI/dFactory.git --recursive
 cd dFactory/VeOmni
 
 # Install dependencies
-uv vene --python 3.11
+uv venv --python 3.11
 uv sync --extra gpu
 
 # Activate environment

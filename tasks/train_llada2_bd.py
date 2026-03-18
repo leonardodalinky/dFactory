@@ -3,26 +3,33 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 from functools import partial
-from typing import Any, Dict, List, Literal, Tuple, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import wandb
 from tqdm import trange
-
 from veomni.checkpoint import build_checkpointer, ckpt_to_state_dict
-from veomni.data import (
-    build_dataloader,
-    build_iterative_dataset,
-    build_mapping_dataset,
-)
+from veomni.data import build_dataloader, build_iterative_dataset, build_mapping_dataset
 from veomni.distributed.offloading import build_activation_offloading_context
 from veomni.distributed.parallel_state import get_parallel_state, init_parallel_state
 from veomni.distributed.torch_parallelize import build_parallelize_model
-from veomni.models import build_foundation_model, build_tokenizer, save_model_assets, save_model_weights
+from veomni.models import (
+    build_foundation_model,
+    build_tokenizer,
+    save_model_assets,
+    save_model_weights,
+)
+from veomni.models.registry import ModelRegistry
 from veomni.optim import build_lr_scheduler, build_optimizer
 from veomni.utils import helper
-from veomni.utils.arguments import DataArguments, ModelArguments, TrainingArguments, parse_args, save_args
+from veomni.utils.arguments import (
+    DataArguments,
+    ModelArguments,
+    TrainingArguments,
+    parse_args,
+    save_args,
+)
 from veomni.utils.device import (
     get_device_type,
     get_nccl_backend,
@@ -30,11 +37,13 @@ from veomni.utils.device import (
     synchronize,
 )
 from veomni.utils.dist_utils import all_reduce
-from veomni.models.registry import ModelRegistry
-ModelRegistry.register_modeling_path("models.llada2_moe")
-from dataset.data_transform import process_mdm_tokenized_example, process_mdm_sft_example
-from dataset import build_local_dataset
 
+ModelRegistry.register_modeling_path("models.llada2_moe")
+from dataset import build_hf_dataset, build_local_dataset
+from dataset.data_transform import (
+    process_mdm_sft_example,
+    process_mdm_tokenized_example,
+)
 
 logger = helper.create_logger(__name__)
 
@@ -52,9 +61,13 @@ class LLaDA2DataArguments(DataArguments):
         default="conversation",
         metadata={"help": "Type of the training data."},
     )
-    datasets_type: Literal["mapping", "local"] = field(
+    datasets_type: Literal["mapping", "local", "hf"] = field(
         default="mapping",
         metadata={"help": "Type of the datasets."},
+    )
+    train_config_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "The config name for the Huggingface dataset."},
     )
     text_keys: str = field(
         default="messages",
@@ -228,6 +241,9 @@ def main():
         elif args.data.datasets_type == "local":
             logger.info_rank0("Start building local dataset")
             train_dataset = build_local_dataset(args.data.train_path, transform=transform)
+        elif args.data.datasets_type == "hf":
+            logger.info_rank0("Start building Huggingface dataset")
+            train_dataset = build_hf_dataset(args.data.train_path, args.data.train_config_name, transform=transform)
         
         dataset_length = None if not hasattr(train_dataset, "__len__") else len(train_dataset)
         if args.data.datasets_type == "mapping" or args.data.datasets_type == "local":
