@@ -239,7 +239,7 @@
     },
     {
       "id": 156917,
-      "content": "<|reserved_token_22|>",
+      "content": "<|normal|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -248,7 +248,7 @@
     },
     {
       "id": 156918,
-      "content": "<|reserved_token_23|>",
+      "content": "<|interleaved|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
