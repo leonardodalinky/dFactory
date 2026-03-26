@@ -10,6 +10,34 @@ import jsonlines
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+_ICONTENT_TYPE = pa.list_(
+    pa.struct(
+        [
+            pa.field("think", pa.string()),
+            pa.field("output", pa.string()),
+        ]
+    )
+)
+
+_MESSAGE_TYPE = pa.list_(
+    pa.struct(
+        [
+            pa.field("role", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("icontent", _ICONTENT_TYPE),
+        ]
+    )
+)
+
+SCHEMA = pa.schema(
+    [
+        pa.field("raw_data_id", pa.string()),
+        pa.field("messages", _MESSAGE_TYPE),
+        pa.field("tags", pa.list_(pa.string())),
+        pa.field("data_source", pa.string()),
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +92,7 @@ def convert_jsonl_to_parquet(
     logger.info(f"Read {len(data)} records from JSONL")
 
     def _write(records: list, path: Path) -> str:
-        table = pa.Table.from_pylist(records)
+        table = pa.Table.from_pylist(records, schema=SCHEMA)
         pq.write_table(table, path, compression="snappy")
         logger.info(f"Written {len(records)} records → {path}")
         return str(path)

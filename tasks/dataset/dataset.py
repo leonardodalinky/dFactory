@@ -36,7 +36,7 @@ def build_hf_dataset(
 
     parallel_state = get_parallel_state()
 
-    dataset = load_dataset(path, config_name, split=namespace)
+    dataset = load_dataset(path, config_name, split=namespace, num_proc=8)
     dataset = dataset.shuffle(seed=seed)
     dataset = split_dataset_by_node(dataset, parallel_state.dp_rank, parallel_state.dp_size)
 
