@@ -328,13 +328,16 @@ def main():
         logger.info_rank0("train_architecture is lora, freezing base model and injecting LoRA adapters")
         lora_target_modules_support = ["query_key_value", "dense", "gate_proj", "up_proj", "down_proj"]
         freeze_parameters(model)
+        pretrained_lora_path = args.model.pretrained_lora_path
+        if pretrained_lora_path in (None, "null", "None", ""):
+            pretrained_lora_path = None
         add_lora_to_model(
             model,
             lora_rank=args.model.lora_rank,
             lora_alpha=args.model.lora_alpha,
             lora_target_modules=args.model.lora_target_modules,
             init_lora_weights=args.model.init_lora_weights,
-            pretrained_lora_path=args.model.pretrained_lora_path,
+            pretrained_lora_path=pretrained_lora_path,
             lora_target_modules_support=lora_target_modules_support,
         )
         model.to(torch.bfloat16)
@@ -726,6 +729,35 @@ def main():
             output_dir=args.train.output_dir,
             ckpt_manager=args.train.ckpt_manager,
         )
+
+        # Merge LoRA deltas into base weights and strip adapter keys
+        if args.train.train_architecture == "lora":
+            logger.info_rank0("Merging LoRA weights into base model for HF checkpoint...")
+            scaling = args.model.lora_alpha / args.model.lora_rank
+            # Collect lora_A / lora_B pairs keyed by module prefix
+            lora_a_suffix = ".lora_A.default.weight"
+            lora_b_suffix = ".lora_B.default.weight"
+            lora_a_keys = [k for k in model_state_dict if k.endswith(lora_a_suffix)]
+            for a_key in lora_a_keys:
+                prefix = a_key[: -len(lora_a_suffix)]  # e.g. "model.layers.0.self_attn.query_key_value"
+                b_key = prefix + lora_b_suffix
+                base_key = prefix + ".base_layer.weight"
+                if b_key in model_state_dict and base_key in model_state_dict:
+                    lora_a = model_state_dict[a_key].float()
+                    lora_b = model_state_dict[b_key].float()
+                    model_state_dict[base_key] = model_state_dict[base_key].float() + scaling * (lora_b @ lora_a)
+                    model_state_dict[base_key] = model_state_dict[base_key].to(torch.bfloat16)
+
+            # Rename base_layer keys back to original names, drop lora keys
+            merged_state_dict = {}
+            for k, v in model_state_dict.items():
+                if "lora_A" in k or "lora_B" in k:
+                    continue
+                new_key = k.replace(".base_layer.", ".")
+                merged_state_dict[new_key] = v
+            model_state_dict = merged_state_dict
+            logger.info_rank0(f"LoRA merge done. Final state dict has {len(model_state_dict)} keys.")
+
         save_model_weights(hf_weights_path, model_state_dict, model_assets=model_assets)
         logger.info_rank0(f"Huggingface checkpoint saved at {hf_weights_path} successfully!")
 
