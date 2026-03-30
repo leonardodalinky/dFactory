@@ -1,3 +1,7 @@
+logs/
+cache/
+output/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -48,9 +52,6 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
-
-# Tokenizer cache for tests
-.tokenizer_cache/
 .pytest_cache/
 cover/
 
@@ -160,99 +161,4 @@ cython_debug/
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-.idea/
-
-# MacOS
-.DS_Store
-
-# Vim
-*.swp
-
-# Documentation
-docs/_build
-
-# SGL
-benchmark/mmlu/data
-benchmark/mmlu/data.tar
-benchmark/llava_bench/images
-benchmark/llava_bench/mme_pack
-*.jsonl
-tmp*.txt
-
-# Plots
-*.pdf
-
-# personnal
-work_dirs/
-*.csv
-
-!logo.png
-log.txt
-
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-compile_commands.json
-
-*.iml
-
-# VSCode
-.vscode
-
-1
-
-# Autoenv
-.env.leave
-
-# Rust lib
-Cargo.lock
-
-lmms-eval
-
-# temp files
-tmp_*
-rsync_tmp_*
-
-# outputs
-llada2_mini_bd_sft_outputs/
-llada2_mini_bd_sft_lora_outputs/
-icoder_dataset*/
-wandb/
-log/
-
-.claude/
-llada2_mini_bd_sft*/
-*.slurm
-
-questions/
-results*/
+#.idea/

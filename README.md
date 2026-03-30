@@ -163,6 +163,10 @@ This file must come from the directory of your original base model — the one y
 cp /path/to/original_base_model/modeling_llada2_moe.py /path/to/save/separate_expert_model/
 ```
 
+**Step 3:**
+
+Add ` "use_qk_norm": true,` to the model config file (`config.json`) in the separate_expert_model directory. This is necessary to ensure that the model uses the correct normalization during inference, matching the architecture used during training.
+
 With the model converted and the modeling file in place, you are now ready to chat! Follow the instructions on the [official model card](https://huggingface.co/inclusionAI/LLaDA2.0-mini-preview#%F0%9F%A4%97-hugging-face-transformers) to start a conversation with your model.
 
 ## MoE Expert Merging and Splitting Utilities

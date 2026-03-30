@@ -67,6 +67,10 @@ class LLaDA2ModelArguments(ModelArguments):
         default="query_key_value,dense,gate_proj,up_proj,down_proj",
         metadata={"help": "Comma-separated list of modules to apply LoRA to."},
     )
+    lora_target_modules_support: str = field(
+        default="query_key_value,dense,gate_proj,up_proj,down_proj",
+        metadata={"help": "Comma-separated list of modules that are supported for LoRA."},
+    )
     init_lora_weights: Optional[Literal["kaiming", "full"]] = field(
         default="kaiming",
         metadata={"help": "Initialization method for LoRA weights."},
@@ -284,7 +288,7 @@ def main():
             train_dataset = build_hf_dataset(args.data.train_path, args.data.train_config_name, transform=transform)
         
         dataset_length = None if not hasattr(train_dataset, "__len__") else len(train_dataset)
-        if args.data.datasets_type == "mapping" or args.data.datasets_type == "local":
+        if args.data.datasets_type == "mapping" or args.data.datasets_type == "local" or args.data.datasets_type == "hf":
             dataset_length = dataset_length / args.train.data_parallel_size
         args.train.compute_train_steps(args.data.max_seq_len, args.data.train_size, dataset_length)
 
@@ -326,7 +330,6 @@ def main():
     # LoRA: freeze base model and inject adapters before FSDP wrapping
     if args.train.train_architecture == "lora":
         logger.info_rank0("train_architecture is lora, freezing base model and injecting LoRA adapters")
-        lora_target_modules_support = ["query_key_value", "dense", "gate_proj", "up_proj", "down_proj"]
         freeze_parameters(model)
         pretrained_lora_path = args.model.pretrained_lora_path
         if pretrained_lora_path in (None, "null", "None", ""):
@@ -338,9 +341,31 @@ def main():
             lora_target_modules=args.model.lora_target_modules,
             init_lora_weights=args.model.init_lora_weights,
             pretrained_lora_path=pretrained_lora_path,
-            lora_target_modules_support=lora_target_modules_support,
+            lora_target_modules_support=args.model.lora_target_modules_support.split(","),
         )
         model.to(torch.bfloat16)
+        # Unfreeze embeddings: tie_word_embeddings=False, so word_embeddings and
+        # lm_head are independent parameters and both must be unfrozen.
+        # iCoder extends the vocabulary with new tokens whose rows must be learned
+        # from scratch — LoRA low-rank deltas are insufficient for this.
+        for param in model.model.word_embeddings.parameters():
+            param.requires_grad_(True)
+        for param in model.lm_head.parameters():
+            param.requires_grad_(True)
+        logger.info_rank0("Unfroze word_embeddings and lm_head for new vocabulary tokens")
+        # Unfreeze all RMSNorm weights (input_layernorm, post_attention_layernorm,
+        # model.norm). Tiny parameter count (~84K) but helps the model adapt its
+        # activation scale distribution to the new reasoning format and tokens.
+        for name, param in model.named_parameters():
+            if "layernorm" in name or name.endswith("model.norm.weight"):
+                param.requires_grad_(True)
+        logger.info_rank0("Unfroze RMSNorm weights for activation scale adaptation")
+        # Unfreeze MoE router gates (mlp.gate.weight per layer, ~10.5M total).
+        # New reasoning format shifts token routing distribution across experts.
+        for name, param in model.named_parameters():
+            if ".mlp.gate.weight" in name:
+                param.requires_grad_(True)
+        logger.info_rank0("Unfroze MoE router gates for expert routing adaptation")
         # Count trainable params
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in model.parameters())
@@ -742,11 +767,12 @@ def main():
                 prefix = a_key[: -len(lora_a_suffix)]  # e.g. "model.layers.0.self_attn.query_key_value"
                 b_key = prefix + lora_b_suffix
                 base_key = prefix + ".base_layer.weight"
-                if b_key in model_state_dict and base_key in model_state_dict:
-                    lora_a = model_state_dict[a_key].float()
-                    lora_b = model_state_dict[b_key].float()
-                    model_state_dict[base_key] = model_state_dict[base_key].float() + scaling * (lora_b @ lora_a)
-                    model_state_dict[base_key] = model_state_dict[base_key].to(torch.bfloat16)
+                assert b_key in model_state_dict, f"LoRA merge: missing lora_B key {b_key}"
+                assert base_key in model_state_dict, f"LoRA merge: missing base weight key {base_key}"
+                lora_a = model_state_dict[a_key].float()
+                lora_b = model_state_dict[b_key].float()
+                model_state_dict[base_key] = model_state_dict[base_key].float() + scaling * (lora_b @ lora_a)
+                model_state_dict[base_key] = model_state_dict[base_key].to(torch.bfloat16)
 
             # Rename base_layer keys back to original names, drop lora keys
             merged_state_dict = {}
@@ -762,6 +788,7 @@ def main():
         logger.info_rank0(f"Huggingface checkpoint saved at {hf_weights_path} successfully!")
 
     dist.barrier()
+    wandb.finish()
     dist.destroy_process_group()
 
 

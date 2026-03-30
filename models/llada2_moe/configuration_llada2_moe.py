@@ -16,7 +16,7 @@ class LLaDA2MoeConfig(PretrainedConfig):
         num_key_value_heads=0,
         hidden_act="silu",
         use_qkv_bias=False,  # llada2 only
-        use_qk_norm=False,
+        use_qk_norm=True,
         use_bias=True,  # llada2 only
         rms_norm_eps=1e-05,
         norm_head=False,  # llada2 only
@@ -54,6 +54,7 @@ class LLaDA2MoeConfig(PretrainedConfig):
         self.num_key_value_heads = num_key_value_heads
         self.hidden_act = hidden_act
         self.use_qkv_bias = use_qkv_bias
+        self.use_qk_norm = use_qk_norm
         self.use_bias = use_bias
         self.norm_head = norm_head
         self.rms_norm_eps = rms_norm_eps

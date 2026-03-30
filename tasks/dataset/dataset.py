@@ -38,7 +38,6 @@ def build_hf_dataset(
 
     dataset = load_dataset(path, config_name, split=namespace, num_proc=8)
     dataset = dataset.shuffle(seed=seed)
-    dataset = split_dataset_by_node(dataset, parallel_state.dp_rank, parallel_state.dp_size)
 
     if transform:
         transform = partial(transform, source_name=source_name)
