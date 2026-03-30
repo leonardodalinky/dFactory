@@ -57,7 +57,8 @@ train:
   same_token_labels: true
   latent_loss_weight: 1.0
   token_loss_weight: 1.0
-  latent_dim: 384
-  sentence_model_name: all-MiniLM-L6-v2
+  latent_dim: 768
+  latent_head_lr: 1.0e-4
+  sentence_model_name: all-mpnet-base-v2
   use_wandb: false
   log_steps: 1
