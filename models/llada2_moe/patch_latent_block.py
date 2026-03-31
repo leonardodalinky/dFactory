@@ -233,14 +233,15 @@ def build_obj1_attention_mask(
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    """Build Objective 1 attention mask for latent generation.
+    """Build Objective 1 attention mask for latent generation (S' only).
 
-    Allowed attention in the S' quadrant (first max_seq_len positions):
+    Mask values: 0.0 = allow attention, -inf = block attention.
+
+    Allowed attention:
         - prompt <-> prompt
         - latent -> prompt
         - latent <-> latent  (bidirectional among all latents)
-    All other attention is blocked (S quadrant, cross-quadrants, and
-    non-prompt/non-latent positions in S').
+    All other positions (non-prompt, non-latent response tokens) are invisible.
 
     Args:
         max_seq_len: sequence length after latent insertion (= num_blocks * block_size).
@@ -250,44 +251,138 @@ def build_obj1_attention_mask(
         dtype: float dtype for the mask.
 
     Returns:
-        (batch, 1, 2*max_seq_len, 2*max_seq_len) attention mask.
-        0.0 where attention is allowed, -inf where blocked.
+        (batch, 1, max_seq_len, max_seq_len) attention mask.
     """
     B = response_masks.shape[0]
-    full_len = 2 * max_seq_len
     num_blocks = max_seq_len // block_size
 
-    # Identify position types in the S' half
+    # Identify position types
     latent_pos_set = set(get_latent_positions(num_blocks, block_size))
     is_latent = torch.zeros(max_seq_len, dtype=torch.bool, device=device)
     for p in latent_pos_set:
         is_latent[p] = True
 
-    # prompt_mask: True at prompt positions (not response AND not latent)
-    # Note: latent positions in response blocks have response_mask=True,
-    # but we treat them as "latent" not "prompt".
+    # prompt = not response AND not latent
     prompt_masks = ~response_masks & ~is_latent.unsqueeze(0)  # (B, max_seq_len)
 
-    # Build per-sample mask
-    mask = torch.full((B, 1, full_len, full_len), float("-inf"), dtype=dtype, device=device)
+    mask = torch.full((B, 1, max_seq_len, max_seq_len), float("-inf"), dtype=dtype, device=device)
 
     is_latent_expanded = is_latent.unsqueeze(0).expand(B, -1)  # (B, max_seq_len)
 
     for b in range(B):
-        prompt_idx = prompt_masks[b].nonzero(as_tuple=True)[0]  # prompt positions
-        latent_idx = is_latent_expanded[b].nonzero(as_tuple=True)[0]  # latent positions
+        prompt_idx = prompt_masks[b].nonzero(as_tuple=True)[0]
+        latent_idx = is_latent_expanded[b].nonzero(as_tuple=True)[0]
 
         # prompt <-> prompt
         if prompt_idx.numel() > 0:
             mask[b, 0, prompt_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
 
-        # latent -> prompt (latent queries attend to prompt keys)
+        # latent -> prompt
         if latent_idx.numel() > 0 and prompt_idx.numel() > 0:
             mask[b, 0, latent_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
 
         # latent <-> latent
         if latent_idx.numel() > 0:
             mask[b, 0, latent_idx.unsqueeze(1), latent_idx.unsqueeze(0)] = 0.0
+
+    return mask
+
+
+def sample_latent_mask(
+    num_blocks: int,
+    noise_range: Tuple[float, float],
+    device: torch.device,
+) -> torch.Tensor:
+    """Sample a random mask for latent diffusion in Obj1.
+
+    Each latent is independently masked with probability sigma,
+    where sigma ~ Uniform(noise_range[0], noise_range[1]).
+
+    Args:
+        num_blocks: number of latent tokens.
+        noise_range: (low, high) for uniform sampling of mask ratio.
+        device: target device.
+
+    Returns:
+        (num_blocks,) boolean tensor. True = masked (to predict), False = given as GT.
+    """
+    sigma = torch.rand(1, device=device) * (noise_range[1] - noise_range[0]) + noise_range[0]
+    return torch.rand(num_blocks, device=device) < sigma
+
+
+def build_obj1_latent_diffusion_mask(
+    max_seq_len: int,
+    block_size: int,
+    num_blocks: int,
+    response_masks: torch.Tensor,
+    latent_masked: torch.Tensor,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Build Objective 1 attention mask for latent diffusion mode.
+
+    The input sequence is [S' (max_seq_len) | GT_ref (num_unmasked)].
+    Masked latents in S' are prediction targets.
+    Unmasked latents' GT embeddings are appended as reference conditioning.
+
+    Attention rules:
+        - prompt <-> prompt: allowed
+        - masked S'_latent -> prompt: allowed
+        - masked S'_latent <-> masked S'_latent: allowed (bidirectional)
+        - masked S'_latent -> GT_ref: allowed (all unmasked GT visible)
+        - unmasked S'_latent: invisible (no query, no key)
+        - prompt -> S'_latent / GT: blocked
+        - GT positions: never serve as query
+        - other response positions: invisible
+
+    Args:
+        max_seq_len: S' length (num_blocks * block_size).
+        block_size: tokens per block (including latent).
+        num_blocks: number of blocks.
+        response_masks: (batch, max_seq_len) boolean. True = response position.
+        latent_masked: (batch, num_blocks) boolean. True = masked (to predict).
+        device: target device.
+        dtype: float dtype for the mask.
+
+    Returns:
+        (batch, 1, total_len, total_len) mask where total_len = max_seq_len + num_unmasked.
+    """
+    B = response_masks.shape[0]
+    num_unmasked = int((~latent_masked[0]).sum().item())  # same across batch for simplicity
+    total_len = max_seq_len + num_unmasked
+
+    latent_pos_list = get_latent_positions(num_blocks, block_size)
+    is_latent_sp = torch.zeros(max_seq_len, dtype=torch.bool, device=device)
+    for p in latent_pos_list:
+        is_latent_sp[p] = True
+
+    prompt_masks_2d = ~response_masks & ~is_latent_sp.unsqueeze(0)  # (B, max_seq_len)
+
+    mask = torch.full((B, 1, total_len, total_len), float("-inf"), dtype=dtype, device=device)
+
+    latent_pos_tensor = torch.tensor(latent_pos_list, device=device)
+    gt_ref_start = max_seq_len
+
+    for b in range(B):
+        prompt_idx = prompt_masks_2d[b].nonzero(as_tuple=True)[0]
+        masked_latent_idx = latent_pos_tensor[latent_masked[b]]  # S' positions of masked latents
+        gt_ref_idx = torch.arange(gt_ref_start, gt_ref_start + num_unmasked, device=device)
+
+        # prompt <-> prompt
+        if prompt_idx.numel() > 0:
+            mask[b, 0, prompt_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
+
+        # masked S'_latent -> prompt
+        if masked_latent_idx.numel() > 0 and prompt_idx.numel() > 0:
+            mask[b, 0, masked_latent_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
+
+        # masked S'_latent <-> masked S'_latent (bidirectional)
+        if masked_latent_idx.numel() > 0:
+            mask[b, 0, masked_latent_idx.unsqueeze(1), masked_latent_idx.unsqueeze(0)] = 0.0
+
+        # masked S'_latent -> all GT ref positions
+        if masked_latent_idx.numel() > 0 and gt_ref_idx.numel() > 0:
+            mask[b, 0, masked_latent_idx.unsqueeze(1), gt_ref_idx.unsqueeze(0)] = 0.0
 
     return mask
 
@@ -584,6 +679,7 @@ def latent_block_generate(
     latent_token_id: int = 156901,
     eos_id: int = 156892,
     eos_early_stop: bool = False,
+    latent_block_causal: bool = False,
 ) -> torch.Tensor:
     """Two-phase latent-block diffusion generation (aligned with LLaDA 2.1).
 
@@ -623,6 +719,9 @@ def latent_block_generate(
         latent_token_id: <|block_latent|> token ID.
         eos_id: End-of-sequence token ID.
         eos_early_stop: Stop generation early if EOS is produced.
+        latent_block_causal: If True, Phase 1 generates latents autoregressively
+            -- each latent_i is predicted conditioned on prompt + previously
+            predicted latents 0..i-1 (projected back via LatentInputProjector).
 
     Returns:
         Generated token IDs (1, output_length), excluding the prompt.
@@ -667,43 +766,121 @@ def latent_block_generate(
     # ======================================================================
     # Phase 1: Latent Planning
     # ======================================================================
-    obj1_input = x.clone()
-    obj1_input[~prompt_mask_in_new_coords.unsqueeze(0).expand_as(obj1_input)] = mask_id
-    obj1_input[:, latent_positions] = latent_token_id  # use <|block_latent|> not <|mask|>
-
-    # Obj1 attention mask: prompt<->prompt, latent->prompt, latent<->latent
-    obj1_mask = torch.full(
-        (1, 1, total_length, total_length),
-        float("-inf"),
-        dtype=torch.bfloat16,
-        device=device,
-    )
     is_prompt = prompt_mask_in_new_coords & ~is_latent
-    prompt_idx = is_prompt.nonzero(as_tuple=True)[0]
-    latent_idx = is_latent.nonzero(as_tuple=True)[0]
-
-    if prompt_idx.numel() > 0:
-        obj1_mask[0, 0, prompt_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
-    if latent_idx.numel() > 0 and prompt_idx.numel() > 0:
-        obj1_mask[0, 0, latent_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
-    if latent_idx.numel() > 0:
-        obj1_mask[0, 0, latent_idx.unsqueeze(1), latent_idx.unsqueeze(0)] = 0.0
-
     position_ids = torch.arange(total_length, device=device).unsqueeze(0)
 
-    model.model._latent_injection = None
-    _ = model(
-        input_ids=obj1_input,
-        attention_mask=obj1_mask,
-        position_ids=position_ids,
-        use_cache=False,
-    )
-    last_hidden = model._captured_last_hidden_state
-    latent_hidden = last_hidden[:, latent_positions, :]
-    predicted_latent = latent_output_head(latent_hidden)
-    latent_embeds_for_injection = latent_input_projector(predicted_latent)
+    if not latent_block_causal:
+        # --- Standard mode: predict all latents in one forward pass ---
+        obj1_input = x.clone()
+        obj1_input[~prompt_mask_in_new_coords.unsqueeze(0).expand_as(obj1_input)] = mask_id
+        obj1_input[:, latent_positions] = latent_token_id
 
-    del last_hidden, latent_hidden
+        obj1_mask = torch.full(
+            (1, 1, total_length, total_length),
+            float("-inf"), dtype=torch.bfloat16, device=device,
+        )
+        prompt_idx = is_prompt.nonzero(as_tuple=True)[0]
+        latent_idx = is_latent.nonzero(as_tuple=True)[0]
+
+        if prompt_idx.numel() > 0:
+            obj1_mask[0, 0, prompt_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
+        if latent_idx.numel() > 0 and prompt_idx.numel() > 0:
+            obj1_mask[0, 0, latent_idx.unsqueeze(1), prompt_idx.unsqueeze(0)] = 0.0
+        if latent_idx.numel() > 0:
+            obj1_mask[0, 0, latent_idx.unsqueeze(1), latent_idx.unsqueeze(0)] = 0.0
+
+        model.model._latent_injection = None
+        _ = model(
+            input_ids=obj1_input, attention_mask=obj1_mask,
+            position_ids=position_ids, use_cache=False,
+        )
+        last_hidden = model._captured_last_hidden_state
+        latent_hidden = last_hidden[:, latent_positions, :]
+        predicted_latent = latent_output_head(latent_hidden)
+        latent_embeds_for_injection = latent_input_projector(predicted_latent)
+
+        del last_hidden, latent_hidden, obj1_input, obj1_mask
+    else:
+        # --- Latent diffusion mode: iterative denoising of latent tokens ---
+        # Start with all latents masked. Each step: predict all, keep highest
+        # confidence ones as "unmasked" GT, re-predict the rest conditioned on them.
+        obj1_base = x.clone()
+        obj1_base[~prompt_mask_in_new_coords.unsqueeze(0).expand_as(obj1_base)] = mask_id
+        obj1_base[:, latent_positions] = latent_token_id
+
+        response_mask_1d = ~is_prompt
+        response_masks_2d = response_mask_1d.unsqueeze(0)  # (1, total_length)
+
+        # All latents start as masked (to predict)
+        latent_is_masked = torch.ones(1, num_blocks, dtype=torch.bool, device=device)
+        # Store predicted latent embeddings (latent_dim) for all blocks
+        all_predicted = torch.zeros(1, num_blocks, latent_output_head.mlp[-1].out_features, device=device)
+
+        # Iterative denoising: unmask 1 latent per step (like LLaDA 2.1 token gen)
+        for step in range(num_blocks):
+            num_still_masked = latent_is_masked.sum().item()
+            if num_still_masked == 0:
+                break
+
+            unmasked_indices = (~latent_is_masked[0]).nonzero(as_tuple=True)[0]
+            num_unmasked = unmasked_indices.numel()
+
+            # Build input: [S' | GT_ref (num_unmasked)]
+            if num_unmasked > 0:
+                gt_placeholder = torch.full(
+                    (1, num_unmasked), latent_token_id, dtype=torch.long, device=device
+                )
+                obj1_input = torch.cat([obj1_base, gt_placeholder], dim=1)
+                gt_positions = list(range(total_length, total_length + num_unmasked))
+                gt_embeds = latent_input_projector(
+                    all_predicted[:, unmasked_indices, :]
+                )
+                model.model._latent_injection = (gt_positions, gt_embeds)
+            else:
+                obj1_input = obj1_base.clone()
+                model.model._latent_injection = None
+
+            obj1_mask = build_obj1_latent_diffusion_mask(
+                total_length, block_size, num_blocks,
+                response_masks_2d, latent_is_masked, device, torch.bfloat16,
+            )
+
+            obj1_total_len = total_length + num_unmasked
+            obj1_pos = torch.cat([
+                position_ids[0, :total_length],
+                torch.arange(num_unmasked, dtype=torch.long, device=device),
+            ]).unsqueeze(0)
+
+            _ = model(
+                input_ids=obj1_input, attention_mask=obj1_mask,
+                position_ids=obj1_pos, use_cache=False,
+            )
+            last_hidden = model._captured_last_hidden_state
+
+            # Extract predictions at masked latent positions
+            masked_sp_positions = [latent_positions[i] for i in range(num_blocks) if latent_is_masked[0, i]]
+            if len(masked_sp_positions) > 0:
+                masked_hidden = last_hidden[:, masked_sp_positions, :]
+                masked_pred = latent_output_head(masked_hidden)  # (1, num_masked, latent_dim)
+
+                # Compute confidence as cosine similarity with a reference direction
+                # (use L2 norm as a proxy for confidence -- higher norm = more confident)
+                confidence = masked_pred.norm(dim=-1)  # (1, num_masked)
+
+                # Update all_predicted for masked positions
+                masked_block_indices = latent_is_masked[0].nonzero(as_tuple=True)[0]
+                all_predicted[:, masked_block_indices, :] = masked_pred
+
+                # Unmask the highest-confidence latent
+                best_idx = confidence[0].argmax().item()
+                best_block = masked_block_indices[best_idx].item()
+                latent_is_masked[0, best_block] = False
+
+            del last_hidden, obj1_input, obj1_mask
+
+        latent_embeds_for_injection = latent_input_projector(all_predicted)
+        del obj1_base, all_predicted
+
     torch.cuda.empty_cache()
 
     # ======================================================================

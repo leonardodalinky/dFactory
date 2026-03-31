@@ -60,5 +60,8 @@ train:
   latent_dim: 768
   latent_head_lr: 1.0e-4
   sentence_model_name: all-mpnet-base-v2
+  latent_diffusion_obj1: false
+  latent_noise_range_low: 0.3
+  latent_noise_range_high: 1.0
   use_wandb: false
   log_steps: 1

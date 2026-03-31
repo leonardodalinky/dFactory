@@ -68,6 +68,8 @@ from models.llada2_moe.patch_latent_block import (
     remap_response_mask,
     get_latent_positions,
     build_obj1_attention_mask,
+    build_obj1_latent_diffusion_mask,
+    sample_latent_mask,
     build_noisy_for_obj1,
     build_noisy_for_obj2,
     build_labels_with_latent,
@@ -168,6 +170,20 @@ class LLaDA2TrainingArguments(TrainingArguments):
     latent_head_lr: float = field(
         default=1.0e-4,
         metadata={"help": "Learning rate for LatentOutputHead and LatentInputProjector (trained from scratch)."},
+    )
+    latent_diffusion_obj1: bool = field(
+        default=False,
+        metadata={"help": "If True, Obj1 applies diffusion-style masking to latent tokens. "
+                          "Randomly mask a subset of latents (to predict) while providing "
+                          "the rest as GT conditioning via appended reference tokens."},
+    )
+    latent_noise_range_low: float = field(
+        default=0.3,
+        metadata={"help": "Lower bound for latent masking ratio in Obj1 diffusion mode."},
+    )
+    latent_noise_range_high: float = field(
+        default=1.0,
+        metadata={"help": "Upper bound for latent masking ratio in Obj1 diffusion mode."},
     )
 
 
@@ -597,34 +613,79 @@ def main():
                 # OBJECTIVE 1: Latent Generation
                 # Memory optimization: S is fully blocked in Obj1 mask, so we
                 # only forward S' (max_seq_len) instead of [S', S] (2*max_seq_len).
+                # With latent_diffusion_obj1: randomly mask a subset of latents
+                # and provide the rest as GT conditioning via appended ref tokens.
                 # ==============================================================
                 obj1_noisy = build_noisy_for_obj1(
                     clean_with_latent, response_mask_new, mask_token_id, latent_positions,
                     latent_token_id=latent_token_id,
                 )
-                # Obj1 mask: only need the S' quadrant (max_seq_len x max_seq_len)
-                obj1_mask = build_obj1_attention_mask(
-                    max_seq_len, block_size, response_mask_new, device, bd_mask_dtype
-                )[:, :, :max_seq_len, :max_seq_len]
 
-                obj1_position_ids = (
-                    torch.arange(max_seq_len, dtype=torch.long, device=device)
-                    .unsqueeze(0)
-                    .expand(batch_size, -1)
-                )
+                if args.train.latent_diffusion_obj1:
+                    # Sample which latents are masked (to predict) vs given as GT
+                    latent_masked = sample_latent_mask(
+                        num_blocks,
+                        noise_range=(args.train.latent_noise_range_low, args.train.latent_noise_range_high),
+                        device=device,
+                    ).unsqueeze(0).expand(batch_size, -1)  # (B, num_blocks)
 
-                # Ensure no injection for Obj1
-                model.model._latent_injection = None
+                    # Unmasked latents: their GT embeddings are appended as ref tokens
+                    unmasked_indices = (~latent_masked[0]).nonzero(as_tuple=True)[0]
+                    num_unmasked = unmasked_indices.numel()
+
+                    if num_unmasked > 0:
+                        gt_placeholder_ids = torch.full(
+                            (batch_size, num_unmasked), latent_token_id,
+                            dtype=obj1_noisy.dtype, device=device,
+                        )
+                        obj1_input = torch.cat([obj1_noisy, gt_placeholder_ids], dim=1)
+
+                        # Inject unmasked GT embeddings at appended positions
+                        gt_positions = list(range(max_seq_len, max_seq_len + num_unmasked))
+                        gt_embeds = latent_input_projector(
+                            st_embeddings[:, unmasked_indices, :]
+                        )  # (B, num_unmasked, hidden_size)
+                        model.model._latent_injection = (gt_positions, gt_embeds)
+                    else:
+                        obj1_input = obj1_noisy
+                        model.model._latent_injection = None
+
+                    obj1_mask = build_obj1_latent_diffusion_mask(
+                        max_seq_len, block_size, num_blocks,
+                        response_mask_new, latent_masked, device, bd_mask_dtype,
+                    )
+
+                    obj1_total_len = max_seq_len + num_unmasked
+                    obj1_position_ids = torch.cat([
+                        torch.arange(max_seq_len, dtype=torch.long, device=device),
+                        torch.arange(num_unmasked, dtype=torch.long, device=device),
+                    ], dim=0).unsqueeze(0).expand(batch_size, -1)
+
+                    # Latent loss only on masked positions (intersected with non-padding)
+                    latent_loss_mask = latent_loss_mask & latent_masked
+                else:
+                    obj1_input = obj1_noisy
+                    obj1_mask = build_obj1_attention_mask(
+                        max_seq_len, block_size, response_mask_new, device, bd_mask_dtype
+                    )
+                    model.model._latent_injection = None
+                    obj1_total_len = max_seq_len
+                    obj1_position_ids = (
+                        torch.arange(max_seq_len, dtype=torch.long, device=device)
+                        .unsqueeze(0)
+                        .expand(batch_size, -1)
+                    )
 
                 with model_fwd_context:
                     _ = model(
-                        input_ids=obj1_noisy,
+                        input_ids=obj1_input,
                         attention_mask=obj1_mask,
                         position_ids=obj1_position_ids,
                         use_cache=False,
                         output_router_logits=False,
                     )
-                    last_hidden = model._captured_last_hidden_state  # (B, max_seq_len, hidden_size)
+                    last_hidden = model._captured_last_hidden_state  # (B, obj1_total_len, hidden_size)
+                    # Extract S' latent positions (not GT ref positions)
                     latent_hidden = last_hidden[
                         :, latent_positions, :
                     ]  # (B, num_blocks, hidden_size)
@@ -644,7 +705,7 @@ def main():
                 total_latent_loss += scaled_latent_loss.item()
 
                 # Free Obj1 intermediates
-                del obj1_noisy, obj1_mask, last_hidden, latent_hidden, predicted_latent
+                del obj1_input, obj1_noisy, obj1_mask, last_hidden, latent_hidden, predicted_latent
                 torch.cuda.empty_cache()
 
                 # ==============================================================
