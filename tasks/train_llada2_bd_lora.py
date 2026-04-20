@@ -360,12 +360,19 @@ def main():
             if "layernorm" in name or name.endswith("model.norm.weight"):
                 param.requires_grad_(True)
         logger.info_rank0("Unfroze RMSNorm weights for activation scale adaptation")
-        # Unfreeze MoE router gates (mlp.gate.weight per layer, ~10.5M total).
-        # New reasoning format shifts token routing distribution across experts.
-        for name, param in model.named_parameters():
-            if ".mlp.gate.weight" in name:
-                param.requires_grad_(True)
-        logger.info_rank0("Unfroze MoE router gates for expert routing adaptation")
+        # Unfreeze MoE expert weights for the last N layers
+        unfreeze_expert_layers = getattr(args.train, "unfreeze_expert_layers", 2)
+        if unfreeze_expert_layers > 0:
+            num_layers = model.config.num_hidden_layers
+            start_layer = num_layers - unfreeze_expert_layers
+            for name, param in model.named_parameters():
+                if ".experts." in name:
+                    # e.g. model.layers.18.mlp.experts.gate_proj
+                    parts = name.split(".")
+                    layer_idx = int(parts[parts.index("layers") + 1])
+                    if layer_idx >= start_layer:
+                        param.requires_grad_(True)
+            logger.info_rank0(f"Unfroze MoE expert weights for layers {start_layer}-{num_layers - 1}")
         # Count trainable params
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
         total = sum(p.numel() for p in model.parameters())

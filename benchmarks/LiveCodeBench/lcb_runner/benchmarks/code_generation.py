@@ -7,6 +7,44 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from datasets import load_dataset
+from huggingface_hub import hf_hub_download
+
+
+# Replicate the version→file mapping from the original loading script,
+# since datasets>=3.0 no longer supports loading scripts.
+_LCB_LITE_FILES = {
+    "release_v1": ["test.jsonl"],
+    "release_v2": ["test.jsonl", "test2.jsonl"],
+    "release_v3": ["test.jsonl", "test2.jsonl", "test3.jsonl"],
+    "release_v4": ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl"],
+    "release_v5": ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl"],
+    "release_v6": ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl"],
+    "release_latest": ["test.jsonl", "test2.jsonl", "test3.jsonl", "test4.jsonl", "test5.jsonl", "test6.jsonl"],
+}
+# Single-version shortcuts: v1, v2, ...
+for _v in ["v1", "v2", "v3", "v4", "v5", "v6"]:
+    _LCB_LITE_FILES[_v] = [f"test{_v[1:]}.jsonl" if _v != "v1" else "test.jsonl"]
+# Range shortcuts: v1_v3, v2_v5, ...
+_v_list = ["v1", "v2", "v3", "v4", "v5", "v6"]
+for _i in range(1, len(_v_list) + 1):
+    for _j in range(_i + 1, len(_v_list) + 1):
+        _LCB_LITE_FILES[_v_list[_i - 1] + "_" + _v_list[_j - 1]] = [
+            f"test{idx}.jsonl" if idx != 1 else "test.jsonl"
+            for idx in range(_i, _j + 1)
+        ]
+
+
+def _load_lcb_lite_jsonl(release_version: str) -> list[dict]:
+    """Download JSONL files from the HF Hub and load them directly."""
+    if release_version not in _LCB_LITE_FILES:
+        raise ValueError(f"Unknown release_version '{release_version}'. Valid: {list(_LCB_LITE_FILES.keys())}")
+    rows = []
+    for fname in _LCB_LITE_FILES[release_version]:
+        path = hf_hub_download("livecodebench/code_generation_lite", fname, repo_type="dataset")
+        with open(path, "r") as f:
+            for line in f:
+                rows.append(json.loads(line))
+    return rows
 
 
 class Platform(Enum):
@@ -122,7 +160,7 @@ class CodeGenerationProblem:
 
 
 def load_code_generation_dataset(release_version="release_v1", start_date=None, end_date=None) -> list[CodeGenerationProblem]:
-    dataset = load_dataset("livecodebench/code_generation_lite", split="test", version_tag=release_version, trust_remote_code=True)
+    dataset = _load_lcb_lite_jsonl(release_version)
     dataset = [CodeGenerationProblem(**p) for p in dataset]  # type: ignore
     if start_date is not None:
         p_start_date = datetime.strptime(start_date, "%Y-%m-%d")

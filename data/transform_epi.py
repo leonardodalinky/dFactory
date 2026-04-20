@@ -117,7 +117,8 @@ def split_by_empty_lines(text: str) -> list[str]:
     if not isinstance(text, str):
         return []
     # split text by empty lines
-    chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n", text) if chunk.strip() != ""]
+    chunks = [chunk for chunk in re.split(r"\n\s*\n", text) if chunk.strip() != ""]
+    # chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n", text) if chunk.strip() != ""]
     return chunks if chunks else [text]
 
 
@@ -343,7 +344,7 @@ async def transform(
                             break
                     else:
                         # Fast deterministic mode for testing without any LLM call.
-                        chunk_res = {"think": "<CoT>", "output": None}
+                        chunk_res = {"think": "<CoT>", "output": assistant_chunk}
                     transformed_code_res.append(chunk_res)
 
                 if not transformed_code_res:

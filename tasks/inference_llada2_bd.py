@@ -48,6 +48,7 @@ def main():
             add_generation_prompt=True,
             tokenize=True,
             return_tensors="pt",
+            interleaved=True,
         )
         generated_tokens = model.generate(
             inputs=input_ids,

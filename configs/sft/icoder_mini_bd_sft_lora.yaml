@@ -12,7 +12,7 @@ model:
   init_lora_weights: kaiming
 
 data:
-  train_path: ../data/transformed_202603
+  train_path: ../data/transformed_202604
   train_config_name: EpiCoder
   data_type: conversation
   datasets_type: hf
@@ -25,12 +25,12 @@ data:
 
 train:
   train_architecture: lora
-  output_dir: ./llada2_mini_bd_sft_lora_outputs
+  output_dir: ./llada2_mini_bd_sft_lora_outputs_repaired
   data_parallel_mode: fsdp2
   tensor_parallel_size: 1
   ulysses_parallel_size: 1
   expert_parallel_size: 1
-  global_batch_size: 4
+  global_batch_size: 6
   micro_batch_size: 2
   num_train_epochs: 1
   rmpad: false
@@ -51,7 +51,7 @@ train:
   enable_gradient_checkpointing: true
   enable_full_shard: true
   enable_fsdp_offload: false
-  enable_activation_offload: false
+  enable_activation_offload: true
   init_device: meta
   broadcast_model_weights_from_rank0: true
   enable_full_determinism: false
@@ -64,9 +64,10 @@ train:
   block_diffusion_mode: true
   block_size: 32
   same_token_labels: true
+  unfreeze_expert_layers: 2
   use_wandb: true
   wandb_project: iCoder-LLaDA
-  wandb_name: icoder-LLaDA2.1-mini-LoRA-SFT-20260326
+  wandb_name: icoder-LLaDA2.1-mini-LoRA-SFT-20260404_repaired
   data_monitor_steps: 1
   data_monitor_max_tokens: 512
   data_monitor_random_sample: true

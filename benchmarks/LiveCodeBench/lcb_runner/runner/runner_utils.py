@@ -50,6 +50,10 @@ def build_runner(args, model: LanguageModel):
         from lcb_runner.runner.fireworks_runner import FireWorksRunner
 
         return FireWorksRunner(args, model)
+    if model.model_style == LMStyle.iCoder:
+        from lcb_runner.runner.icoder_runner import iCoderRunner
+
+        return iCoderRunner(args, model)
     elif model.model_style in []:
         raise NotImplementedError(
             f"Runner for language model style {model.model_style} not implemented yet"

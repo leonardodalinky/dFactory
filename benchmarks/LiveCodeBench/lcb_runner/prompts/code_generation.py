@@ -214,6 +214,7 @@ def format_prompt_generation(
         LMStyle.DeepSeekAPI,
         LMStyle.TogetherAI,
         LMStyle.CohereCommand,
+        LMStyle.iCoder,
     ]:
         chat_messages = [
             {

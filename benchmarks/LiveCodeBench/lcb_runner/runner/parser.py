@@ -132,6 +132,32 @@ def get_args():
         help="End date for the contest to filter the evaluation file (format - YYYY-MM-DD)",
     )
 
+    # iCoder block diffusion arguments
+    parser.add_argument(
+        "--gen_length", type=int, default=2048,
+        help="iCoder: maximum generation length in tokens",
+    )
+    parser.add_argument(
+        "--block_length", type=int, default=32,
+        help="iCoder: block length for block diffusion",
+    )
+    parser.add_argument(
+        "--diffusion_steps", type=int, default=32,
+        help="iCoder: number of diffusion steps per block",
+    )
+    parser.add_argument(
+        "--icoder_threshold", type=float, default=0.7,
+        help="iCoder: confidence threshold for token acceptance",
+    )
+    parser.add_argument(
+        "--editing_threshold", type=float, default=0.5,
+        help="iCoder: editing threshold for quality mode",
+    )
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None,
+        help="iCoder: path to tokenizer (defaults to local_model_path if not set)",
+    )
+
     args = parser.parse_args()
 
     args.stop = args.stop.split(",")

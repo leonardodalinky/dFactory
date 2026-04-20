@@ -34,6 +34,8 @@ class LMStyle(Enum):
 
     TogetherAI = "TogetherAI"
 
+    iCoder = "iCoder"
+
 
 @dataclass
 class LanguageModel:
@@ -860,6 +862,12 @@ LanguageModelList: list[LanguageModel] = [
         LMStyle.DeepSeekR1,
         datetime(2024, 4, 1),
         "https://huggingface.co/agentica-org/DeepCoder-14B-Preview",
+    ),
+    LanguageModel(
+        "icoder-llada2-moe",
+        "iCoder-LLaDA2-MoE",
+        LMStyle.iCoder,
+        datetime(2026, 1, 1),
     ),
 ]
 
